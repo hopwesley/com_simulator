@@ -19,7 +19,7 @@ wake_events = []
 stop_event = threading.Event()
 is_running = False
 os.makedirs(path, exist_ok=True)  # 确保目录存在
-defaultComPort = "/dev/ttys005"  # COM2
+defaultComPort = ""  # COM2 #/dev/ttys005
 
 serialDelegate: Optional[serial.Serial] = None
 job_lock = threading.Lock()
@@ -134,23 +134,6 @@ def show_busy_info(message):
     wx.Yield()  # 确保等待框能及时显示出来
     return busy
 
-
-def initialize_serial_delegate(frame):
-    global serialDelegate, defaultComPort  # 引用全局的 serialDelegate
-    if serialDelegate is None:
-        try:
-            serialDelegate = serial.Serial(port=defaultComPort, baudrate=19200, timeout=5)
-            # 清空串口缓冲区
-            serialDelegate.reset_input_buffer()
-            serialDelegate.reset_output_buffer()
-            wx.CallAfter(frame.log_message, "串口初始化成功")
-
-        except serial.SerialException as e:
-            wx.CallAfter(frame.log_message, f"---->>>>串口初始化失败: {e}")
-            return False  # 如果初始化失败，返回 False
-    return True
-
-
 class SerialFrame(wx.Frame):
     def __init__(self, *args, **kw):
         super(SerialFrame, self).__init__(*args, **kw)
@@ -171,10 +154,23 @@ class SerialFrame(wx.Frame):
         # 创建动态文本显示区域（滚动）
         self.log_display = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(600, 300))
 
+        self.baudrate_selector = wx.ComboBox(panel, choices=["9600", "19200", "38400", "57600", "115200"], style=wx.CB_READONLY)
+        self.baudrate_selector.SetValue("19200")  # 设置默认波特率
+        baudrate_label = wx.StaticText(panel, label="请选择波特率：")
+        port_label = wx.StaticText(panel, label="请选择可用串口：")
+
+        port_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        port_sizer.Add(port_label, 0, wx.ALL | wx.CENTER, 5)
+        port_sizer.Add(self.port_selector, 1, wx.EXPAND | wx.ALL, 5)  # 使下拉框占满剩余空间
+        port_sizer.Add(baudrate_label, 0, wx.ALL | wx.CENTER, 5)
+        port_sizer.Add(self.baudrate_selector, 1, wx.EXPAND | wx.ALL, 5)
+
+        # 在主 sizer 中添加水平 sizer
         sizer.Add(self.numeric_control, 0, wx.ALL | wx.CENTER, 5)
-        sizer.Add(self.port_selector, 0, wx.ALL | wx.CENTER, 5)
+        sizer.Add(port_sizer, 0, wx.EXPAND | wx.ALL, 5)  # 将端口选择区域添加到主 sizer 中
         sizer.Add(self.start_button, 0, wx.ALL | wx.CENTER, 5)
-        sizer.Add(self.log_display, 1, wx.EXPAND | wx.ALL, 5)  # 添加滚动文本区域
+        sizer.Add(self.log_display, 1, wx.EXPAND | wx.ALL, 5)
+
         panel.SetSizer(sizer)
 
         self.SetSize((960, 640))
@@ -187,10 +183,38 @@ class SerialFrame(wx.Frame):
         self.Bind(wx.EVT_TIMER, on_timer, self.timer)
 
         self.non_selectable_items = ["物理串口:", "-------------------", "虚拟串口:"]
+        self.log_messages = []
+
+
+    def initialize_serial_delegate(self):
+        global serialDelegate, defaultComPort  # 引用全局的 serialDelegate
+        if serialDelegate is None:
+            try:
+                baudrate = int(self.baudrate_selector.GetValue())
+                serialDelegate = serial.Serial(port=defaultComPort, baudrate=baudrate, timeout=5)
+                # 清空串口缓冲区
+                serialDelegate.reset_input_buffer()
+                serialDelegate.reset_output_buffer()
+                self.log_message(f"串口初始化成功 串口:{defaultComPort} 波特率：{baudrate}")
+
+            except serial.SerialException as e:
+                self.log_message(f"---->>>>串口初始化失败: {e}")
+                return False  # 如果初始化失败，返回 False
+        return True
 
     def log_message(self, message):
-        """向日志显示区域追加消息"""
-        self.log_display.AppendText(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {message}\n")
+        """向日志显示区域追加消息并管理日志消息的数量"""
+        timestamped_message = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {message}\n"
+
+        # 将新消息添加到消息列表
+        self.log_messages.append(timestamped_message)
+
+        # 如果消息条数超过10万，删除前一半的消息
+        if len(self.log_messages) > 100000:
+            del self.log_messages[:len(self.log_messages) // 2]  # 删除前一半的消息
+
+        # 更新显示区域的内容
+        self.log_display.SetValue(''.join(self.log_messages))  # 将所有消息重新设置到日志显示区域
         self.log_display.SetInsertionPointEnd()  # 滚动到文本末尾
 
     def populate_ports(self):
@@ -220,16 +244,26 @@ class SerialFrame(wx.Frame):
             wx.MessageBox("无法选择该项，请选择具体的串口！", "错误", wx.OK | wx.ICON_ERROR)
             self.port_selector.SetValue("")  # 重置选择框的值
         else:
+            global  defaultComPort
             print(f"选中的串口: {selected_port}")
             self.log_message(f"选中的串口: {selected_port}")
+            defaultComPort = selected_port
+
 
     def on_start_click(self, event):
         global is_running, num_threads
         busy = show_busy_info("正在处理，请稍候...")
 
+        if not defaultComPort:  # 检查 defaultComPort 是否为空字符串
+            self.log_message("串口未选择，请选择一个有效的串口！")
+            wx.MessageBox("请选择有效的串口！", "错误", wx.OK | wx.ICON_ERROR)
+            busy = None  # 隐藏等待框
+            return
+
         num_threads = self.numeric_control.GetValue()
         print(f"------>>>当前线程数: {num_threads}")
         self.log_message(f"启动任务，线程数: {num_threads}")
+        self.log_display.SetValue('')
 
         if not is_running:
             self.start_scheduled_tasks()
@@ -247,7 +281,8 @@ class SerialFrame(wx.Frame):
 
     def start_scheduled_tasks(self):
         global serialDelegate
-        if not initialize_serial_delegate(self):
+
+        if not self.initialize_serial_delegate():
             self.log_message("串口初始化失败")
             return  # 如果初始化失败，直接返回，不执行任务
 
