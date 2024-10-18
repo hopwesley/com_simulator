@@ -1,5 +1,7 @@
 import time
 import os
+from email.policy import default
+
 import serial
 import threading
 from datetime import datetime
@@ -17,9 +19,11 @@ wake_events = []
 stop_event = threading.Event()
 is_running = False
 os.makedirs(path, exist_ok=True)  # 确保目录存在
+defaultComPort = "/dev/ttys005"  # COM2
 
 serialDelegate: Optional[serial.Serial] = None
 job_lock = threading.Lock()
+
 
 def list_available_ports():
     ports = serial.tools.list_ports.comports()
@@ -28,10 +32,12 @@ def list_available_ports():
         available_ports.append(port.device)
     return available_ports
 
+
 def list_virtual_ports():
     # 查找所有的虚拟串口设备
     virtual_ports = glob.glob('/dev/ttys*') + glob.glob('/dev/pts/*')
     return virtual_ports
+
 
 def log_file(file_name, log_str):
     ct = datetime.now()
@@ -124,10 +130,10 @@ def show_busy_info(message):
 
 
 def initialize_serial_delegate():
-    global serialDelegate  # 引用全局的 serialDelegate
+    global serialDelegate, defaultComPort  # 引用全局的 serialDelegate
     if serialDelegate is None:
         try:
-            serialDelegate = serial.Serial(port='/dev/ttys007', baudrate=19200, timeout=5)
+            serialDelegate = serial.Serial(port=defaultComPort, baudrate=19200, timeout=5)
             # 清空串口缓冲区
             serialDelegate.reset_input_buffer()
             serialDelegate.reset_output_buffer()
@@ -150,7 +156,13 @@ class MyFrame(wx.Frame):
         self.start_button = wx.Button(panel, label="开始")
         self.start_button.Bind(wx.EVT_BUTTON, self.on_start_click)
 
+        # 创建下拉选择框
+        self.port_selector = wx.ComboBox(panel, style=wx.CB_READONLY)
+        self.populate_ports()  # 初始化下拉框内容
+        self.port_selector.Bind(wx.EVT_COMBOBOX, self.on_port_selected)  # 绑定事件
+
         sizer.Add(self.numeric_control, 0, wx.ALL | wx.CENTER, 5)
+        sizer.Add(self.port_selector, 0, wx.ALL | wx.CENTER, 5)
         sizer.Add(self.start_button, 0, wx.ALL | wx.CENTER, 5)
         panel.SetSizer(sizer)
 
@@ -167,6 +179,36 @@ class MyFrame(wx.Frame):
 
         available_virtual_ports = list_virtual_ports()
         print("虚拟串口：", available_virtual_ports)
+        self.non_selectable_items = ["物理串口:", "-------------------", "虚拟串口:"]
+
+    def populate_ports(self):
+        """填充物理串口和虚拟串口到下拉框，并添加分割线"""
+        available_ports = list_available_ports()
+        available_virtual_ports = list_virtual_ports()
+
+        # 添加物理串口
+        self.port_selector.Append("物理串口:")
+        self.port_selector.Append("-------------------")
+        for port in available_ports:
+            self.port_selector.Append(port)
+
+        # 添加分割线
+        self.port_selector.Append("虚拟串口:")
+        self.port_selector.Append("-------------------")
+        # 添加虚拟串口
+        for vport in available_virtual_ports:
+            self.port_selector.Append(vport)
+
+    def on_port_selected(self, event):
+        """当用户选择某个串口时，打印出选中的串口"""
+        selected_port = self.port_selector.GetValue()
+
+        # 防止用户选择不可选项
+        if selected_port in self.non_selectable_items:
+            wx.MessageBox("无法选择该项，请选择具体的串口！", "错误", wx.OK | wx.ICON_ERROR)
+            self.port_selector.SetValue("")  # 重置选择框的值
+        else:
+            print(f"选中的串口: {selected_port}")
 
     def on_start_click(self, event):
         global is_running, num_threads
@@ -178,11 +220,13 @@ class MyFrame(wx.Frame):
         if not is_running:
             self.start_scheduled_tasks()
             self.start_button.SetLabel("停止")
+            self.port_selector.Disable()
             is_running = True
 
         else:
             self.stop_scheduled_tasks()
             self.start_button.SetLabel("开始")
+            self.port_selector.Enable()  # 启用下拉框
             is_running = False
 
         busy = None  # 隐藏等待框
