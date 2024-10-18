@@ -5,6 +5,7 @@ import threading
 from datetime import datetime
 import wx  # 引入wxPython
 import schedule
+from typing import Optional
 
 path = "D:/NOTC/send"
 num_threads = 100  # 定义任务数量
@@ -15,9 +16,7 @@ stop_event = threading.Event()
 is_running = False
 os.makedirs(path, exist_ok=True)  # 确保目录存在
 
-# serialDelegate = serial.Serial(port='COM2', baudrate=19200, timeout=5)
-# serialDelegate = serial.Serial(port='/dev/ttys007', baudrate=19200, timeout=5)
-serialDelegate = None
+serialDelegate: Optional[serial.Serial] = None
 job_lock = threading.Lock()
 
 
@@ -75,7 +74,6 @@ def worker(thread_id, local_wake_event):
         if serialDelegate.is_open:
             try:
                 serialDelegate.write(data.encode('utf-8'))  # 发送数据
-                serialDelegate.flush()
                 log_file(thread_name, f"发送[{thread_name}] : {data}")
                 data_list[thread_id] = '0'
             except serial.SerialTimeoutException as e:
