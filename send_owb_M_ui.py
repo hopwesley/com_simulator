@@ -73,41 +73,47 @@ def create_data():
         data_list.append(data)
 
 
-def worker(thread_id, local_wake_event):
+def worker(thread_id, local_wake_event, frame):
     thread_name = f"Thread-{thread_id}"
     while not stop_event.is_set():  # 直接使用全局的 stop_event
         # 等待主线程的唤醒事件
         local_wake_event.wait()  # 直接使用全局的 wake_event
         local_wake_event.clear()
-        print(f"------>>> worker {thread_name} start")
+        wx.CallAfter(frame.log_message, f"线程 {thread_name} 启动")
 
         if stop_event.is_set():
-            print(f"------>>> worker {thread_name} quit")
+            wx.CallAfter(frame.log_message, f"线程 {thread_name} 已停止")
             return  # 如果停止事件已经设置，直接退出
 
         data = data_list[thread_id]
         if data == '0':
-            print(f"------>>> worker {thread_name} should not has empty data")
+            wx.CallAfter(frame.log_message, f"线程 {thread_name} 数据为空，无法发送")
             continue
 
         if serialDelegate.is_open:
             try:
                 serialDelegate.write(data.encode('utf-8'))  # 发送数据
-                log_file(thread_name, f"发送[{thread_name}] : {data}")
+                log_data=f"发送[{thread_name}] : {data}"
+                log_file(thread_name, log_data)
+                wx.CallAfter(frame.log_message, log_data)
                 data_list[thread_id] = '0'
             except serial.SerialTimeoutException as e:
-                log_file(thread_name, f"[{thread_name}]写入超时错误: {e}")
+                log_data=f"[{thread_name}]写入超时错误: {e}"
+                wx.CallAfter(frame.log_message, log_data)
+                log_file(thread_name, log_data)
             except Exception as e:
-                log_file(thread_name, f"[{thread_name}] 错误: {e}")
+                log_data=f"[{thread_name}] 错误: {e}"
+                wx.CallAfter(frame.log_message, log_data)
+                log_file(thread_name, log_data)
         else:
-            print(f"------>>> worker {thread_name} exit: 串口未打开")
+            wx.CallAfter(frame.log_message, f"线程 {thread_name} exit: 串口未打开")
             return  # 如果串口未打开，退出线程
 
 
-def scheduled_job():
-    print("------>>> schedule work start")
+def scheduled_job(frame):
+    wx.CallAfter(frame.log_message, "定时任务开始")
     if not job_lock.acquire(blocking=False):
-        print("------>>> 任务正在执行，跳过此次触发")
+        wx.CallAfter(frame.log_message, "任务正在执行，跳过此次触发")
         return
 
     serialDelegate.flush()
@@ -129,7 +135,7 @@ def show_busy_info(message):
     return busy
 
 
-def initialize_serial_delegate():
+def initialize_serial_delegate(frame):
     global serialDelegate, defaultComPort  # 引用全局的 serialDelegate
     if serialDelegate is None:
         try:
@@ -137,16 +143,17 @@ def initialize_serial_delegate():
             # 清空串口缓冲区
             serialDelegate.reset_input_buffer()
             serialDelegate.reset_output_buffer()
-            print("------>>>串口初始化成功")
+            wx.CallAfter(frame.log_message, "串口初始化成功")
+
         except serial.SerialException as e:
-            print(f"---->>>>串口初始化失败: {e}")
+            wx.CallAfter(frame.log_message, f"---->>>>串口初始化失败: {e}")
             return False  # 如果初始化失败，返回 False
     return True
 
 
-class MyFrame(wx.Frame):
+class SerialFrame(wx.Frame):
     def __init__(self, *args, **kw):
-        super(MyFrame, self).__init__(*args, **kw)
+        super(SerialFrame, self).__init__(*args, **kw)
         panel = wx.Panel(self)
         sizer = wx.BoxSizer(wx.VERTICAL)
 
@@ -174,17 +181,12 @@ class MyFrame(wx.Frame):
         self.SetTitle("调度任务控制")
 
         # schedule.every(20).seconds.do(scheduled_job)
-        schedule.every(1).minutes.do(scheduled_job)
+        # schedule.every(1).minutes.do(scheduled_job)
+        schedule.every(1).minutes.do(lambda: scheduled_job(self))
         self.timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, on_timer, self.timer)
 
-        available_ports = list_available_ports()
-        print("可用的串口：", available_ports)
-
-        available_virtual_ports = list_virtual_ports()
-        print("虚拟串口：", available_virtual_ports)
         self.non_selectable_items = ["物理串口:", "-------------------", "虚拟串口:"]
-
 
     def log_message(self, message):
         """向日志显示区域追加消息"""
@@ -245,19 +247,19 @@ class MyFrame(wx.Frame):
 
     def start_scheduled_tasks(self):
         global serialDelegate
-        if not initialize_serial_delegate():
+        if not initialize_serial_delegate(self):
             self.log_message("串口初始化失败")
             return  # 如果初始化失败，直接返回，不执行任务
 
         for i in range(num_threads):
             event = threading.Event()
             wake_events.append(event)
-            t = threading.Thread(target=worker, args=(i + 1, event))
+            t = threading.Thread(target=worker, args=(i + 1, event, self))
             threads.append(t)
             t.start()
 
         self.log_message("所有线程已启动")
-        scheduled_job()
+        scheduled_job(self)
         self.timer.Start(1000)  # 每1秒检查一次任务调度
 
     def stop_scheduled_tasks(self):
@@ -270,19 +272,18 @@ class MyFrame(wx.Frame):
         for t in threads:
             t.join(timeout=2)  # 使用超时，防止无限期阻塞
             if t.is_alive():
-                print(f"线程 {t.name} 未能及时退出")
+                self.log_message(f"线程 {t.name} 未能及时退出")
 
         threads.clear()
 
         self.log_message("所有任务已停止")
-        print("------>>>所有任务已停止。")
         stop_event.clear()  # 重置停止事件，准备下一次启动
         self.timer.Stop()  # 停止定时器
 
 
 class MyApp(wx.App):
     def OnInit(self):
-        frame = MyFrame(None)
+        frame = SerialFrame(None)
         frame.Show(True)
         return True
 
