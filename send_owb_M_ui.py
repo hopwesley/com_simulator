@@ -7,6 +7,7 @@ import schedule
 from typing import Optional
 import serial.tools.list_ports
 import glob
+import sys
 
 path = "D:/NOTC/send"
 num_threads = 100  # 定义任务数量
@@ -134,6 +135,7 @@ def show_busy_info(message):
 class SerialFrame(wx.Frame):
     def __init__(self, *args, **kw):
         super(SerialFrame, self).__init__(*args, **kw)
+        self.Bind(wx.EVT_CLOSE, self.on_close)
         panel = wx.Panel(self)
         sizer = wx.BoxSizer(wx.VERTICAL)
 
@@ -181,6 +183,33 @@ class SerialFrame(wx.Frame):
 
         self.non_selectable_items = ["物理串口:", "-------------------", "虚拟串口:"]
         self.log_messages = []
+
+    def on_close(self, event):
+        """处理关闭事件并确保干净关闭。"""
+        print("正在关闭应用程序...")
+
+        # 停止定时器
+        if self.timer.IsRunning():
+            self.timer.Stop()  # 停止定时器
+
+        # 通知所有线程停止
+        stop_event.set()  # 设置全局事件，通知线程停止
+        for wake_event in wake_events:
+            wake_event.set()  # 唤醒所有线程，避免它们卡住
+
+        # 等待所有线程结束
+        for t in threads:
+            t.join(timeout=2)  # 确保所有线程结束
+
+        # 关闭串口
+        if serialDelegate and serialDelegate.is_open:
+            serialDelegate.close()  # 关闭串口连接
+
+        # 销毁窗口
+        self.Destroy()
+
+        # 强制退出程序
+        wx.CallAfter(wx.Exit)  # 使用 wx.Exit 强制退出程序
 
 
     def initialize_serial_delegate(self):
