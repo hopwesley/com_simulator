@@ -6,6 +6,8 @@ from datetime import datetime
 import wx  # 引入wxPython
 import schedule
 from typing import Optional
+import serial.tools.list_ports
+import glob
 
 path = "D:/NOTC/send"
 num_threads = 100  # 定义任务数量
@@ -19,6 +21,17 @@ os.makedirs(path, exist_ok=True)  # 确保目录存在
 serialDelegate: Optional[serial.Serial] = None
 job_lock = threading.Lock()
 
+def list_available_ports():
+    ports = serial.tools.list_ports.comports()
+    available_ports = []
+    for port in ports:
+        available_ports.append(port.device)
+    return available_ports
+
+def list_virtual_ports():
+    # 查找所有的虚拟串口设备
+    virtual_ports = glob.glob('/dev/ttys*') + glob.glob('/dev/pts/*')
+    return virtual_ports
 
 def log_file(file_name, log_str):
     ct = datetime.now()
@@ -148,6 +161,12 @@ class MyFrame(wx.Frame):
         schedule.every(1).minutes.do(scheduled_job)
         self.timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, on_timer, self.timer)
+
+        available_ports = list_available_ports()
+        print("可用的串口：", available_ports)
+
+        available_virtual_ports = list_virtual_ports()
+        print("虚拟串口：", available_virtual_ports)
 
     def on_start_click(self, event):
         global is_running, num_threads
