@@ -1,7 +1,4 @@
-import time
 import os
-from email.policy import default
-
 import serial
 import threading
 from datetime import datetime
