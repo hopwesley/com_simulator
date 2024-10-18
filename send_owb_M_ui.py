@@ -161,9 +161,13 @@ class MyFrame(wx.Frame):
         self.populate_ports()  # 初始化下拉框内容
         self.port_selector.Bind(wx.EVT_COMBOBOX, self.on_port_selected)  # 绑定事件
 
+        # 创建动态文本显示区域（滚动）
+        self.log_display = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(600, 300))
+
         sizer.Add(self.numeric_control, 0, wx.ALL | wx.CENTER, 5)
         sizer.Add(self.port_selector, 0, wx.ALL | wx.CENTER, 5)
         sizer.Add(self.start_button, 0, wx.ALL | wx.CENTER, 5)
+        sizer.Add(self.log_display, 1, wx.EXPAND | wx.ALL, 5)  # 添加滚动文本区域
         panel.SetSizer(sizer)
 
         self.SetSize((960, 640))
@@ -180,6 +184,12 @@ class MyFrame(wx.Frame):
         available_virtual_ports = list_virtual_ports()
         print("虚拟串口：", available_virtual_ports)
         self.non_selectable_items = ["物理串口:", "-------------------", "虚拟串口:"]
+
+
+    def log_message(self, message):
+        """向日志显示区域追加消息"""
+        self.log_display.AppendText(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {message}\n")
+        self.log_display.SetInsertionPointEnd()  # 滚动到文本末尾
 
     def populate_ports(self):
         """填充物理串口和虚拟串口到下拉框，并添加分割线"""
@@ -209,6 +219,7 @@ class MyFrame(wx.Frame):
             self.port_selector.SetValue("")  # 重置选择框的值
         else:
             print(f"选中的串口: {selected_port}")
+            self.log_message(f"选中的串口: {selected_port}")
 
     def on_start_click(self, event):
         global is_running, num_threads
@@ -216,6 +227,7 @@ class MyFrame(wx.Frame):
 
         num_threads = self.numeric_control.GetValue()
         print(f"------>>>当前线程数: {num_threads}")
+        self.log_message(f"启动任务，线程数: {num_threads}")
 
         if not is_running:
             self.start_scheduled_tasks()
@@ -234,6 +246,7 @@ class MyFrame(wx.Frame):
     def start_scheduled_tasks(self):
         global serialDelegate
         if not initialize_serial_delegate():
+            self.log_message("串口初始化失败")
             return  # 如果初始化失败，直接返回，不执行任务
 
         for i in range(num_threads):
@@ -243,6 +256,7 @@ class MyFrame(wx.Frame):
             threads.append(t)
             t.start()
 
+        self.log_message("所有线程已启动")
         scheduled_job()
         self.timer.Start(1000)  # 每1秒检查一次任务调度
 
@@ -260,6 +274,7 @@ class MyFrame(wx.Frame):
 
         threads.clear()
 
+        self.log_message("所有任务已停止")
         print("------>>>所有任务已停止。")
         stop_event.clear()  # 重置停止事件，准备下一次启动
         self.timer.Stop()  # 停止定时器
