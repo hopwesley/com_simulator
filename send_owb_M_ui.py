@@ -15,12 +15,9 @@ stop_event = threading.Event()
 is_running = False
 os.makedirs(path, exist_ok=True)  # 确保目录存在
 
-# 配置串口参数
-# ser = serial.Serial(port='COM2', baudrate=19200, timeout=5)
-ser = serial.Serial(port='/dev/ttys007', baudrate=19200, timeout=5)
-# 清空读缓冲区
-ser.reset_input_buffer()
-ser.reset_output_buffer()
+# serialDelegate = serial.Serial(port='COM2', baudrate=19200, timeout=5)
+# serialDelegate = serial.Serial(port='/dev/ttys007', baudrate=19200, timeout=5)
+serialDelegate = None
 job_lock = threading.Lock()
 
 
@@ -58,7 +55,7 @@ def create_data():
         data_list.append(data)
 
 
-def worker(thread_id,local_wake_event):
+def worker(thread_id, local_wake_event):
     thread_name = f"Thread-{thread_id}"
     while not stop_event.is_set():  # 直接使用全局的 stop_event
         # 等待主线程的唤醒事件
@@ -75,10 +72,10 @@ def worker(thread_id,local_wake_event):
             print(f"------>>> worker {thread_name} should not has empty data")
             continue
 
-        if ser.is_open:
+        if serialDelegate.is_open:
             try:
-                ser.write(data.encode('utf-8'))  # 发送数据
-                ser.flush()
+                serialDelegate.write(data.encode('utf-8'))  # 发送数据
+                serialDelegate.flush()
                 log_file(thread_name, f"发送[{thread_name}] : {data}")
                 data_list[thread_id] = '0'
             except serial.SerialTimeoutException as e:
@@ -89,13 +86,14 @@ def worker(thread_id,local_wake_event):
             print(f"------>>> worker {thread_name} exit: 串口未打开")
             return  # 如果串口未打开，退出线程
 
+
 def scheduled_job():
     print("------>>> schedule work start")
     if not job_lock.acquire(blocking=False):
         print("------>>> 任务正在执行，跳过此次触发")
         return
 
-    ser.flush()
+    serialDelegate.flush()
 
     create_data()
     for wake_event in wake_events:
@@ -114,30 +112,51 @@ def show_busy_info(message):
     return busy
 
 
+def initialize_serial_delegate():
+    global serialDelegate  # 引用全局的 serialDelegate
+    if serialDelegate is None:
+        try:
+            serialDelegate = serial.Serial(port='/dev/ttys007', baudrate=19200, timeout=5)
+            # 清空串口缓冲区
+            serialDelegate.reset_input_buffer()
+            serialDelegate.reset_output_buffer()
+            print("------>>>串口初始化成功")
+        except serial.SerialException as e:
+            print(f"---->>>>串口初始化失败: {e}")
+            return False  # 如果初始化失败，返回 False
+    return True
+
+
 class MyFrame(wx.Frame):
     def __init__(self, *args, **kw):
         super(MyFrame, self).__init__(*args, **kw)
         panel = wx.Panel(self)
         sizer = wx.BoxSizer(wx.VERTICAL)
 
-        # 创建开始按钮
+        # 创建自定义的数字输入控件
+        self.numeric_control = NumericControl(panel, value=5, min_value=1, max_value=100)
+
         self.start_button = wx.Button(panel, label="开始")
         self.start_button.Bind(wx.EVT_BUTTON, self.on_start_click)
 
+        sizer.Add(self.numeric_control, 0, wx.ALL | wx.CENTER, 5)
         sizer.Add(self.start_button, 0, wx.ALL | wx.CENTER, 5)
         panel.SetSizer(sizer)
 
-        self.SetSize((600, 400))
+        self.SetSize((960, 640))
         self.SetTitle("调度任务控制")
 
-        schedule.every(20).seconds.do(scheduled_job)
-        # schedule.every(1).minutes.do(scheduled_job)
+        # schedule.every(20).seconds.do(scheduled_job)
+        schedule.every(1).minutes.do(scheduled_job)
         self.timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, on_timer, self.timer)
 
     def on_start_click(self, event):
-        global is_running
+        global is_running, num_threads
         busy = show_busy_info("正在处理，请稍候...")
+
+        num_threads = self.numeric_control.GetValue()
+        print(f"------>>>当前线程数: {num_threads}")
 
         if not is_running:
             self.start_scheduled_tasks()
@@ -152,15 +171,18 @@ class MyFrame(wx.Frame):
         busy = None  # 隐藏等待框
 
     def start_scheduled_tasks(self):
-        create_data()
+        global serialDelegate
+        if not initialize_serial_delegate():
+            return  # 如果初始化失败，直接返回，不执行任务
+
         for i in range(num_threads):
             event = threading.Event()
             wake_events.append(event)
-            event.set()
-            t = threading.Thread(target=worker, args=(i + 1,event))
+            t = threading.Thread(target=worker, args=(i + 1, event))
             threads.append(t)
             t.start()
 
+        scheduled_job()
         self.timer.Start(1000)  # 每1秒检查一次任务调度
 
     def stop_scheduled_tasks(self):
@@ -187,6 +209,76 @@ class MyApp(wx.App):
         frame = MyFrame(None)
         frame.Show(True)
         return True
+
+
+class NumericControl(wx.Panel):
+    def __init__(self, parent, value=5, min_value=1, max_value=100):
+        super(NumericControl, self).__init__(parent)
+        self.min_value = min_value
+        self.max_value = max_value
+
+        # 布局管理
+        hbox = wx.BoxSizer(wx.HORIZONTAL)
+
+        # 增加文本提示 "模拟信道数："
+        self.label = wx.StaticText(self, label="模拟信道数：")
+
+        # 减少按钮
+        self.dec_button = wx.Button(self, label="-")
+        self.dec_button.Bind(wx.EVT_BUTTON, self.on_decrease)
+
+        # 增加按钮
+        self.inc_button = wx.Button(self, label="+")
+        self.inc_button.Bind(wx.EVT_BUTTON, self.on_increase)
+
+        # 输入框
+        self.text_ctrl = wx.TextCtrl(self, value=str(value), style=wx.TE_CENTER)
+        self.text_ctrl.SetMinSize(wx.Size(50, -1))  # 设置宽度为 50
+        self.text_ctrl.Bind(wx.EVT_TEXT, self.on_text_change)
+
+        # 添加控件到布局
+        hbox.Add(self.label, 0, wx.ALIGN_CENTER_VERTICAL | wx.ALL, 5)  # 添加文本提示
+        hbox.Add(self.dec_button, 0, wx.EXPAND | wx.ALL, 5)
+        hbox.Add(self.text_ctrl, 1, wx.EXPAND | wx.ALL, 5)
+        hbox.Add(self.inc_button, 0, wx.EXPAND | wx.ALL, 5)
+
+        self.SetSizer(hbox)
+
+    def on_decrease(self, event):
+        """减少按钮的点击事件"""
+        value = int(self.text_ctrl.GetValue())
+        if value > self.min_value:
+            value -= 1
+            self.text_ctrl.SetValue(str(value))
+
+    def on_increase(self, event):
+        """增加按钮的点击事件"""
+        value = int(self.text_ctrl.GetValue())
+        if value < self.max_value:
+            value += 1
+            self.text_ctrl.SetValue(str(value))
+
+    def on_text_change(self, event):
+        """防止用户手动输入超过范围的值"""
+        try:
+            value = int(self.text_ctrl.GetValue())
+        except ValueError:
+            self.text_ctrl.SetValue(str(self.min_value))
+            return
+
+        if value < self.min_value:
+            self.text_ctrl.SetValue(str(self.min_value))
+        elif value > self.max_value:
+            self.text_ctrl.SetValue(str(self.max_value))
+
+    def GetValue(self):
+        """获取当前的值"""
+        return int(self.text_ctrl.GetValue())
+
+    def SetValue(self, value):
+        """设置当前的值"""
+        if self.min_value <= value <= self.max_value:
+            self.text_ctrl.SetValue(str(value))
 
 
 if __name__ == "__main__":
